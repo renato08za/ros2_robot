@@ -23,23 +23,25 @@ class SimpleDualMotorControl(Node):
         GPIO.setwarnings(False)
 
         # Configura encoder e motores
-        for pin in (ENCA1, ENCB1, ENCA2, ENCB2):
-            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        for pin in (IN1_1, IN2_1, IN1_2, IN2_2):
-            GPIO.setup(pin, GPIO.OUT)
+        GPIO.setup(ENCA1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(ENCB1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(IN1_1, GPIO.OUT)
+        GPIO.setup(IN2_1, GPIO.OUT)
         GPIO.setup(PWM1, GPIO.OUT)
-        GPIO.setup(PWM2, GPIO.OUT)
-
         self.pwm1 = GPIO.PWM(PWM1, 1000)
-        self.pwm2 = GPIO.PWM(PWM2, 1000)
         self.pwm1.start(0)
+
+        GPIO.setup(ENCA2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(ENCB2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(IN1_2, GPIO.OUT)
+        GPIO.setup(IN2_2, GPIO.OUT)
+        GPIO.setup(PWM2, GPIO.OUT)
+        self.pwm2 = GPIO.PWM(PWM2, 1000)
         self.pwm2.start(0)
 
         # Estado interno
-        self.dir1 = 1           # direção: 1 ou -1
+        self.dir1 = 1
         self.dir2 = 1
-        self.last_pwm1 = 0      # último valor de PWM (0–255)
-        self.last_pwm2 = 0
         self.encoder_pos_1 = 0
         self.encoder_pos_2 = 0
         self.last_encoder_1 = 0
@@ -67,42 +69,31 @@ class SimpleDualMotorControl(Node):
 
         self.get_logger().info('Controle simples de dois motores iniciado')
 
-    def _apply_direction_pwm1(self):
-        # Ajusta pinos de direção e mantém último duty
-        GPIO.output(IN1_1, GPIO.HIGH if self.dir1 == 1 else GPIO.LOW)
-        GPIO.output(IN2_1, GPIO.LOW if self.dir1 == 1 else GPIO.HIGH)
-        duty = self.last_pwm1 * 100.0 / 255.0
-        self.pwm1.ChangeDutyCycle(duty)
-
-    def _apply_direction_pwm2(self):
-        GPIO.output(IN1_2, GPIO.HIGH if self.dir2 == 1 else GPIO.LOW)
-        GPIO.output(IN2_2, GPIO.LOW if self.dir2 == 1 else GPIO.HIGH)
-        duty = self.last_pwm2 * 100.0 / 255.0
-        self.pwm2.ChangeDutyCycle(duty)
-
     def _pwm1_set_callback(self, msg: Int32):
         pwm = max(0, min(255, msg.data))
-        self.last_pwm1 = pwm
-        # aplica direção atual com novo duty
-        self._apply_direction_pwm1()
+        GPIO.output(IN1_1, GPIO.HIGH if self.dir1 == 1 else GPIO.LOW)
+        GPIO.output(IN2_1, GPIO.LOW if self.dir1 == 1 else GPIO.HIGH)
+        duty = pwm * 100.0 / 255.0
+        self.pwm1.ChangeDutyCycle(duty)
 
     def _pwm2_set_callback(self, msg: Int32):
         pwm = max(0, min(255, msg.data))
-        self.last_pwm2 = pwm
-        self._apply_direction_pwm2()
+        GPIO.output(IN1_2, GPIO.HIGH if self.dir2 == 1 else GPIO.LOW)
+        GPIO.output(IN2_2, GPIO.LOW if self.dir2 == 1 else GPIO.HIGH)
+        duty = pwm * 100.0 / 255.0
+        self.pwm2.ChangeDutyCycle(duty)
 
     def _motor1_dir_cb(self, msg: Int32):
-        # muda direção imediatamente, mantendo duty
         self.dir1 = 1 if msg.data >= 0 else -1
-        self._apply_direction_pwm1()
+        self.pwm1.ChangeDutyCycle(0)
         self.get_logger().info(f"Motor 1 direção: {'frente' if self.dir1 == 1 else 'ré'}")
 
     def _motor2_dir_cb(self, msg: Int32):
         self.dir2 = 1 if msg.data >= 0 else -1
-        self._apply_direction_pwm2()
+        self.pwm2.ChangeDutyCycle(0)
         self.get_logger().info(f"Motor 2 direção: {'frente' if self.dir2 == 1 else 'ré'}")
 
-   def _poll_encoder1(self):
+    def _poll_encoder1(self):
         last = GPIO.input(ENCA1)
         while self.running:
             cur = GPIO.input(ENCA1)
@@ -110,12 +101,9 @@ class SimpleDualMotorControl(Node):
             # somente conta quando há mudança de estado de ENCA1
             if cur != last and cur == 1:
                 with self.lock:
-                    # incrementa ou decrementa baseada na leitura de ENCB1
                     if b:
-                        # sinal B está alto: conta para frente
                         self.encoder_pos_1 += self.dir1
                     else:
-                        # sinal B está baixo: conta para trás
                         self.encoder_pos_1 -= self.dir1
             last = cur
             time.sleep(0.0002)
@@ -128,16 +116,12 @@ class SimpleDualMotorControl(Node):
             # somente conta quando há mudança de estado de ENCA2
             if cur != last and cur == 1:
                 with self.lock:
-                    # incrementa ou decrementa baseada na leitura de ENCB2
                     if b:
-                        # sinal B está alto: conta para frente
                         self.encoder_pos_2 += self.dir2
                     else:
-                        # sinal B está baixo: conta para trás
                         self.encoder_pos_2 -= self.dir2
             last = cur
             time.sleep(0.0002)
-
 
     def _rpm_calc_loop(self):
         now = time.time()
@@ -146,12 +130,12 @@ class SimpleDualMotorControl(Node):
             return
         self.last_time = now
         with self.lock:
-            d1 = self.encoder_pos_1 - self.last_encoder_1
-            d2 = self.encoder_pos_2 - self.last_encoder_2
+            delta1 = self.encoder_pos_1 - self.last_encoder_1
+            delta2 = self.encoder_pos_2 - self.last_encoder_2
             self.last_encoder_1 = self.encoder_pos_1
             self.last_encoder_2 = self.encoder_pos_2
-        rpm1 = (d1 / PPR) / dt * 60.0
-        rpm2 = (d2 / PPR) / dt * 60.0
+        rpm1 = (delta1 / PPR) / dt * 60.0
+        rpm2 = (delta2 / PPR) / dt * 60.0
         self.rpm_pub_1.publish(Float32(data=rpm1))
         self.rpm_pub_2.publish(Float32(data=rpm2))
         print(f"RPM1: {rpm1:.1f} | RPM2: {rpm2:.1f}")
