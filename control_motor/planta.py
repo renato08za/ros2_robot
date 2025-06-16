@@ -96,31 +96,31 @@ class SimpleDualMotorControl(Node):
     def _poll_encoder1(self):
         last = GPIO.input(ENCA1)
         while self.running:
-            cur = GPIO.input(ENCA1)
+            a = GPIO.input(ENCA1)
             b = GPIO.input(ENCB1)
             # somente conta quando há mudança de estado de ENCA1
-            if cur != last and cur == 1:
+            if a != last and a == 1:
                 with self.lock:
-                    if b:
+                    if a:
                         self.encoder_pos_1 += self.dir1
                     else:
                         self.encoder_pos_1 -= self.dir1
-            last = cur
+            last = a
             time.sleep(0.0002)
 
     def _poll_encoder2(self):
         last = GPIO.input(ENCA2)
         while self.running:
-            cur = GPIO.input(ENCA2)
+            a = GPIO.input(ENCA2)
             b = GPIO.input(ENCB2)
             # somente conta quando há mudança de estado de ENCA2
-            if cur != last and cur == 1:
+            if a != last and a == 1:
                 with self.lock:
-                    if b:
+                    if a:
                         self.encoder_pos_2 += self.dir2
                     else:
                         self.encoder_pos_2 -= self.dir2
-            last = cur
+            last = a
             time.sleep(0.0002)
 
     def _rpm_calc_loop(self):
