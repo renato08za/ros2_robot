@@ -21,7 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'pid_test_dual = control_motor.pid_test_dual:main',
-            'planta = control_motor.planta:main',
+            'motores_semPID = control_motor.motores_semPID:main',
+            'degrau = control_motor.degrau:main',
         ],
     },
 )
