@@ -7,7 +7,6 @@ ROS2 node que implementa PID de velocidade para ambos motores
 - Publica /motorX_direction (Int32)
 Agora inclui feedforward de segunda ordem usando o modelo:
     G(s) = K·ωn² / (s² + 2ζωn·s + ωn²)
-e seu inverso discretizado para gerar antecipação.
 """
 import rclpy
 from rclpy.node import Node
@@ -32,33 +31,40 @@ class DualMotorSecondOrderPid(Node):
         self.integrals = [0.0, 0.0]
         self.prev_errors = [0.0, 0.0]
         self.d_filters = [0.0, 0.0]
-        self.ff_states = [ [0.0, 0.0], [0.0, 0.0] ]  # ref history
+        self.ff_states = [[0.0, 0.0], [0.0, 0.0]]  # histórico de r
         self.last_time = time.time()
 
-        # pubs/subs
+        # publishers / subscribers
         self.pubs_pwm = []
         self.pubs_dir = []
         for i in (1, 2):
             self.pubs_pwm.append(self.create_publisher(Int32, f'/motor{i}_pwm_set', 10))
             self.pubs_dir.append(self.create_publisher(Int32, f'/motor{i}_direction', 10))
-            self.create_subscription(Float32, f'/motor{i}_rpm', lambda m, idx=i-1: self._rpm_cb(idx,m), 10)
-            self.create_subscription(Float32, f'/desired_rpm{i}', lambda m, idx=i-1: self._setpoint_cb(idx,m), 10)
+            self.create_subscription(Float32, f'/motor{i}_rpm', lambda m, idx=i-1: self._rpm_cb(idx, m), 10)
+            self.create_subscription(Float32, f'/desired_rpm{i}', lambda m, idx=i-1: self._setpoint_cb(idx, m), 10)
         # controle a 50Hz
         self.create_timer(0.02, self._control_loop)
         self.get_logger().info('DualMotorSecondOrderPid iniciado')
 
-    def _rpm_cb(self, idx, msg): self.measured[idx] = msg.data
+    def _rpm_cb(self, idx, msg):
+        self.measured[idx] = msg.data
+
     def _setpoint_cb(self, idx, msg):
         self.setpoints[idx] = msg.data
-        self.integrals[idx] = self.prev_errors[idx] = self.d_filters[idx] = 0.0
+        # limpa integrador e estados de feedforward
+        self.integrals[idx] = 0.0
+        self.prev_errors[idx] = 0.0
+        self.d_filters[idx] = 0.0
         self.ff_states[idx] = [0.0, 0.0]
 
     def _control_loop(self):
-        now = time.time(); dt = now - self.last_time
-        if dt <= 0: return
+        now = time.time()
+        dt = now - self.last_time
+        if dt <= 0:
+            return
         self.last_time = now
-        for i in (0,1):
-            # parâmetros
+        for i in (0, 1):
+            # lê parâmetros
             kp = self.get_parameter(f'kp{i+1}').value
             ki = self.get_parameter(f'ki{i+1}').value
             kd = self.get_parameter(f'kd{i+1}').value
@@ -68,38 +74,43 @@ class DualMotorSecondOrderPid(Node):
             # erro
             e = self.setpoints[i] - self.measured[i]
             # PID
-            self.integrals[i] += e*dt
-            de = (e - self.prev_errors[i])/dt
+            self.integrals[i] += e * dt
+            de = (e - self.prev_errors[i]) / dt
             self.prev_errors[i] = e
             # filtro derivativo
-            alpha = 1.0/(1.0 + 1.0/(zeta*wn*dt))
-            self.d_filters[i] = alpha*self.d_filters[i] + (1-alpha)*de
-            u_pid = kp*e + ki*self.integrals[i] + kd*self.d_filters[i]
-            # feedforward 2ª ordem via inversão discreta (Tustin)
-            # G(s) = K wn²/(s²+2ζwn s + wn²)
-            # Inverso contínuo H(s)= (s²+2ζwn s+wn²)/(K wn²)
-            # discretizar: s≈2/dt*(z-1)/(z+1)
-            # implementa diferença: u_ff[k] = a0*r[k] + a1*r[k-1] + a2*r[k-2] - b1*u_ff[k-1] - b2*u_ff[k-2]
-            # coeficientes Tustin:
-            T=dt; w=wn
+            alpha = 1.0 / (1.0 + 1.0 / (zeta * wn * dt))
+            self.d_filters[i] = alpha * self.d_filters[i] + (1 - alpha) * de
+            u_pid = kp * e + ki * self.integrals[i] + kd * self.d_filters[i]
+            # feedforward 2ª ordem (inverso Tustin)
+            T = dt; w = wn
             A0 = 4 + 4*zeta*w*T + w*w*T*T
-            b1 = (2*w*w*T*T - 8)/A0
-            b2 = (4 - 4*zeta*w*T + w*w*T*T)/A0
-            a0 = K*A0/(K*w*w*T*T)
-            a1 = -2*K*(4 - w*w*T*T)/(K*w*w*T*T)
-            a2 = K*(4 - 4*zeta*w*T + w*w*T*T)/(K*w*w*T*T)
+            b1 = (2*w*w*T*T - 8) / A0
+            b2 = (4 - 4*zeta*w*T + w*w*T*T) / A0
+            a0 = A0 / (w*w*T*T)
+            a1 = -2 * (4 - w*w*T*T) / (w*w*T*T)
+            a2 = (4 - 4*zeta*w*T + w*w*T*T) / (w*w*T*T)
             r0 = self.setpoints[i]
             r1, r2 = self.ff_states[i]
-            u_ff = a0*r0 + a1*r1 + a2*r2 - b1*self.ff_states[i][0] - b2*self.ff_states[i][1]
-            # shift states
-            self.ff_states[i] = [u_ff, self.ff_states[i][0]]
-            # total
-            u = u_pid + u_ff
-            dir = 1 if u>=0 else -1; pwm = int(min(abs(u),255))
-            self.pubs_dir[i].publish(Int32(data=dir))
+            u_ff = a0 * r0 + a1 * r1 + a2 * r2 - b1 * self.ff_states[i][0] - b2 * self.ff_states[i][1]
+            # atualiza histórico
+            self.ff_states[i] = [r0, r1]
+            # sinal total
+            u = u_pid + (u_ff / K)
+            direction = 1 if u >= 0 else -1
+            pwm = int(min(abs(u), 255))
+            self.pubs_dir[i].publish(Int32(data=direction))
             self.pubs_pwm[i].publish(Int32(data=pwm))
 
-    def destroy_node(self): super().destroy_node()
+    def destroy_node(self):
+        super().destroy_node()
 
-if __name__=='__main__':
-    rclpy.init(); node=DualMotorSecondOrderPid(); rclpy.spin(node); node.destroy_node(); rclpy.shutdown()
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = DualMotorSecondOrderPid()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
