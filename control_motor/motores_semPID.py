@@ -71,56 +71,87 @@ class SimpleDualMotorControl(Node):
 
     def _pwm1_set_callback(self, msg: Int32):
         pwm = max(0, min(255, msg.data))
-        GPIO.output(IN1_1, GPIO.HIGH if self.dir1 == 1 else GPIO.LOW)
-        GPIO.output(IN2_1, GPIO.LOW if self.dir1 == 1 else GPIO.HIGH)
         duty = pwm * 100.0 / 255.0
+        self.last_duty1 = duty 
+
+        GPIO.output(IN1_1, GPIO.HIGH if self.dir1 == 1 else GPIO.LOW)
+        GPIO.output(IN2_1, GPIO.LOW  if self.dir1 == 1 else GPIO.HIGH)
+
         self.pwm1.ChangeDutyCycle(duty)
 
     def _pwm2_set_callback(self, msg: Int32):
         pwm = max(0, min(255, msg.data))
-        GPIO.output(IN1_2, GPIO.HIGH if self.dir2 == 1 else GPIO.LOW)
-        GPIO.output(IN2_2, GPIO.LOW if self.dir2 == 1 else GPIO.HIGH)
         duty = pwm * 100.0 / 255.0
+        self.last_duty2 = duty 
+
+        GPIO.output(IN1_2, GPIO.HIGH if self.dir2 == 1 else GPIO.LOW)
+        GPIO.output(IN2_2, GPIO.LOW  if self.dir2 == 1 else GPIO.HIGH)
+
         self.pwm2.ChangeDutyCycle(duty)
 
     def _motor1_dir_cb(self, msg: Int32):
-        self.dir1 = 1 if msg.data >= 0 else -1
+        new_dir = 1 if msg.data >= 0 else -1
+        if new_dir == self.dir1:
+            return
+
         self.pwm1.ChangeDutyCycle(0)
-        self.get_logger().info(f"Motor 1 direção: {'frente' if self.dir1 == 1 else 'ré'}")
+        time.sleep(0.1)
+
+        self.dir1 = new_dir
+        GPIO.output(IN1_1, GPIO.HIGH if self.dir1 == 1 else GPIO.LOW)
+        GPIO.output(IN2_1, GPIO.LOW  if self.dir1 == 1 else GPIO.HIGH)
+
+        if hasattr(self, 'last_duty1'):
+            self.pwm1.ChangeDutyCycle(self.last_duty1)
+
+        self.get_logger().info(
+            f"Motor 1 direção: {'frente' if self.dir1 == 1 else 'ré'}"
+        )
 
     def _motor2_dir_cb(self, msg: Int32):
-        self.dir2 = 1 if msg.data >= 0 else -1
-        self.pwm2.ChangeDutyCycle(0)
-        self.get_logger().info(f"Motor 2 direção: {'frente' if self.dir2 == 1 else 'ré'}")
+        new_dir = 1 if msg.data >= 0 else -1
+        if new_dir == self.dir2:
+            return
 
+        self.pwm2.ChangeDutyCycle(0)
+        time.sleep(0.1)
+
+        self.dir2 = new_dir
+        GPIO.output(IN1_2, GPIO.HIGH if self.dir2 == 1 else GPIO.LOW)
+        GPIO.output(IN2_2, GPIO.LOW  if self.dir2 == 1 else GPIO.HIGH)
+
+        if hasattr(self, 'last_duty2'):
+            self.pwm2.ChangeDutyCycle(self.last_duty2)
+
+        self.get_logger().info(
+            f"Motor 1 direção: {'frente' if self.dir2 == 1 else 'ré'}"
+        )
     def _poll_encoder1(self):
-        last = GPIO.input(ENCA1)
+        last_a = GPIO.input(ENCA1)
         while self.running:
             a = GPIO.input(ENCA1)
             b = GPIO.input(ENCB1)
-            # somente conta quando há mudança de estado de ENCA1
-            if a != last and a == 1:
+            # borda de subida em A
+            if a != last_a and a == 1:
                 with self.lock:
-                    if a:
-                        self.encoder_pos_1 += self.dir1
-                    else:
-                        self.encoder_pos_1 -= self.dir1
-            last = a
+                    # usa canal B para direção real do pulso
+                    delta =  1 if b == 1 else -1
+                    self.encoder_pos_1 += delta
+            last_a = a
             time.sleep(0.0002)
 
     def _poll_encoder2(self):
-        last = GPIO.input(ENCA2)
+        last_a = GPIO.input(ENCA2)
         while self.running:
             a = GPIO.input(ENCA2)
             b = GPIO.input(ENCB2)
-            # somente conta quando há mudança de estado de ENCA2
-            if a != last and a == 1:
+            # borda de subida em A
+            if a != last_a and a == 1:
                 with self.lock:
-                    if a:
-                        self.encoder_pos_2 += self.dir2
-                    else:
-                        self.encoder_pos_2 -= self.dir2
-            last = a
+                    # usa canal B para direção real do pulso
+                    delta =  1 if b == 1 else -1
+                    self.encoder_pos_2 += delta
+            last_a = a
             time.sleep(0.0002)
 
     def _rpm_calc_loop(self):
