@@ -1,102 +1,128 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Bool
 import time
 import numpy as np
 from scipy.interpolate import interp1d
 
-class DualPIController(Node):
+class DualPIDSyncController(Node):
     def __init__(self):
-        super().__init__('dual_pi_controller')
+        super().__init__('dual_pid_sync_controller')
 
-        # — Ganhos do PI (iguais ao de antes)
-        self.kp1, self.ki1 = 0.8, 4.5
-        self.kp2, self.ki2 = 0.5, 3.0
+        # —––––––––––––––––––––––––––––––––––—
+        # 1) Ganhos PID e de sincronização
+        # —––––––––––––––––––––––––––––––––––—
+        self.Kp1, self.Ki1, self.Kd1 = 1.0, 5.0, 0.1
+        self.Kp2, self.Ki2, self.Kd2 = 1.0, 5.0, 0.1
+        self.Ksync = 0.2       # quanto mais alto, mais força para igualar velocidades
 
-        # — teto de RPM
-        self.max_rpm = 60.0
-
-        # — referências iniciais (podem começar em zero)
-        self.ref1 = 0.0
-        self.ref2 = 0.0
-
-        # — estados internos
+        # —––––––––––––––––––––––––––––––––––—
+        # 2) Estados internos
+        # —––––––––––––––––––––––––––––––––––—
         self.err_int_1 = 0.0
         self.err_int_2 = 0.0
-        self.t_prev_1  = time.time()
-        self.t_prev_2  = time.time()
+        self.err_ant_1 = 0.0
+        self.err_ant_2 = 0.0
+        self.last_time = time.time()
 
-        # — feed-forward (igual ao seu mapeamento)
+        # —––––––––––––––––––––––––––––––––––—
+        # 3) Feed-forward (seu mapeamento PWM↔RPM)
+        # —––––––––––––––––––––––––––––––––––—
         pwm_vals  = np.array([  0,  25,  50,  75, 100, 125, 150, 175, 200, 225, 255])
         rpm1_vals = np.array([  0,   0,   0,  25,  35,  45,  55,  60,  65,  70,  80])
         rpm2_vals = np.array([  0,   0,   0,   0,   0,  25,  30,  35,  40,  45,  50])
-        self.ff1 = interp1d(rpm1_vals, pwm_vals, bounds_error=False,
-                            fill_value=(pwm_vals[0], pwm_vals[-1]))
-        self.ff2 = interp1d(rpm2_vals, pwm_vals, bounds_error=False,
-                            fill_value=(pwm_vals[0], pwm_vals[-1]))
+        self.ff1 = interp1d(rpm1_vals, pwm_vals, bounds_error=False, fill_value=(0,255))
+        self.ff2 = interp1d(rpm2_vals, pwm_vals, bounds_error=False, fill_value=(0,255))
 
-        # Subscrições aos tópicos de RPM vindos do seu encoder
-        self.sub1 = self.create_subscription(Float32, 'motor1_rpm', self.cb1, 10)
-        self.sub2 = self.create_subscription(Float32, 'motor2_rpm', self.cb2, 10)
+        # —––––––––––––––––––––––––––––––––––—
+        # 4) Variáveis de domínio
+        # —––––––––––––––––––––––––––––––––––—
+        self.rpm1 = 0.0
+        self.rpm2 = 0.0
+        self.ref   = 0.0
+        self.max_rpm = 60.0
 
-        # Publicadores para os tópicos que o driver espera  
-        self.pub1 = self.create_publisher(Float32, 'motor1_pwm_set', 10)
-        self.pub2 = self.create_publisher(Float32, 'motor2_pwm_set', 10)
+        # —––––––––––––––––––––––––––––––––––—
+        # 5) Publishers de direção e PWM
+        # —––––––––––––––––––––––––––––––––––—
+        self.pub_dir1  = self.create_publisher(Bool,    'motor1_direction',  10)
+        self.pub_dir2  = self.create_publisher(Bool,    'motor2_direction',  10)
+        self.pub_pwm1  = self.create_publisher(Float32, 'motor1_pwm_set',    10)
+        self.pub_pwm2  = self.create_publisher(Float32, 'motor2_pwm_set',    10)
 
-        # — tópicos de medição e saída PWM
-        self.sub1 = self.create_subscription(Float32, 'rpm1', self.cb1, 10)
-        self.sub2 = self.create_subscription(Float32, 'rpm2', self.cb2, 10)
-        self.pub1 = self.create_publisher(Float32, 'pwm1', 10)
-        self.pub2 = self.create_publisher(Float32, 'pwm2', 10)
+        # —––––––––––––––––––––––––––––––––––—
+        # 6) Subscriptions: ref única e medições
+        # —––––––––––––––––––––––––––––––––––—
+        self.create_subscription(Float32, 'ref_rpm',      self.ref_cb,  10)
+        self.create_subscription(Float32, 'motor1_rpm',   self.rpm1_cb, 10)
+        self.create_subscription(Float32, 'motor2_rpm',   self.rpm2_cb, 10)
 
-    def ref1_callback(self, msg: Float32):
-        # aqui você define dinamicamente a referência, já respeitando o teto
-        self.ref1 = min(msg.data, self.max_rpm)
+        # —––––––––––––––––––––––––––––––––––—
+        # 7) Timer de controle (20 Hz)
+        # —––––––––––––––––––––––––––––––––––—
+        self.create_timer(1/20, self.control_loop)
 
-    def ref2_callback(self, msg: Float32):
-        self.ref2 = min(msg.data, self.max_rpm)
+    def ref_cb(self, msg: Float32):
+        # set-point único, com clamp
+        self.ref = min(msg.data, self.max_rpm)
 
-    def cb1(self, msg: Float32):
+    def rpm1_cb(self, msg: Float32):
+        self.rpm1 = msg.data
+
+    def rpm2_cb(self, msg: Float32):
+        self.rpm2 = msg.data
+
+    def control_loop(self):
         now = time.time()
-        dt  = now - self.t_prev_1; self.t_prev_1 = now
+        dt  = now - self.last_time
+        self.last_time = now
 
-        rpm = msg.data
-        pwm_ff = float(self.ff1(self.ref1))
+        # ––––––––––––––––– Feed-forward
+        pwm_ff1 = float(self.ff1(self.ref))
+        pwm_ff2 = float(self.ff2(self.ref))
 
-        err      = self.ref1 - rpm
-        self.err_int_1 += err * dt
-        u_fb     = self.kp1 * err + self.ki1 * self.err_int_1
+        # ––––––––––––––––– Erros individuais
+        err1 = self.ref - self.rpm1
+        err2 = self.ref - self.rpm2
 
-        pwm = pwm_ff + u_fb
-        pwm = max(0.0, min(255.0, pwm))
+        # ––––––––––––––––– Integral
+        self.err_int_1 += err1 * dt
+        self.err_int_2 += err2 * dt
 
-        out = Float32(); out.data = pwm
-        self.pub1.publish(out)
+        # ––––––––––––––––– Derivativo
+        derr1 = (err1 - self.err_ant_1) / dt if dt>0 else 0.0
+        derr2 = (err2 - self.err_ant_2) / dt if dt>0 else 0.0
+        self.err_ant_1 = err1
+        self.err_ant_2 = err2
 
-    def cb2(self, msg: Float32):
-        now = time.time()
-        dt  = now - self.t_prev_2; self.t_prev_2 = now
+        # ––––––––––––––––– Feedback PID
+        u1 = self.Kp1*err1 + self.Ki1*self.err_int_1 + self.Kd1*derr1
+        u2 = self.Kp2*err2 + self.Ki2*self.err_int_2 + self.Kd2*derr2
 
-        rpm = msg.data
-        pwm_ff = float(self.ff2(self.ref2))
+        # ––––––––––––––––– Sync coupling
+        diff = self.rpm1 - self.rpm2
+        u1 -= self.Ksync * diff
+        u2 += self.Ksync * diff
 
-        err      = self.ref2 - rpm
-        self.err_int_2 += err * dt
-        u_fb     = self.kp2 * err + self.ki2 * self.err_int_2
+        # ––––––––––––––––– PWM final e saturação
+        pwm1 = max(0.0, min(255.0, pwm_ff1 + u1))
+        pwm2 = max(0.0, min(255.0, pwm_ff2 + u2))
 
-        pwm = pwm_ff + u_fb
-        pwm = max(0.0, min(255.0, pwm))
+        # ––––––––––––––––– Publica direção (sempre pra frente)
+        self.pub_dir1.publish(Bool(data=True))
+        self.pub_dir2.publish(Bool(data=True))
 
-        out = Float32(); out.data = pwm
-        self.pub2.publish(out)
+        # ––––––––––––––––– Publica PWM
+        self.pub_pwm1.publish(Float32(data=pwm1))
+        self.pub_pwm2.publish(Float32(data=pwm2))
 
 def main(args=None):
     rclpy.init(args=args)
-    node = DualPIController()
+    node = DualPIDSyncController()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
