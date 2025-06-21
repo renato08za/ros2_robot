@@ -36,11 +36,13 @@ class DualPIController(Node):
         self.ff2 = interp1d(rpm2_vals, pwm_vals, bounds_error=False,
                             fill_value=(pwm_vals[0], pwm_vals[-1]))
 
-        # — tópico de referências (você publica aqui o desired RPM)
-        self.sub_ref1 = self.create_subscription(
-            Float32, 'ref_rpm1', self.ref1_callback,  10)
-        self.sub_ref2 = self.create_subscription(
-            Float32, 'ref_rpm2', self.ref2_callback,  10)
+        # Subscrições aos tópicos de RPM vindos do seu encoder
+        self.sub1 = self.create_subscription(Float32, 'motor1_rpm', self.cb1, 10)
+        self.sub2 = self.create_subscription(Float32, 'motor2_rpm', self.cb2, 10)
+
+        # Publicadores para os tópicos que o driver espera  
+        self.pub1 = self.create_publisher(Float32, 'motor1_pwm_set', 10)
+        self.pub2 = self.create_publisher(Float32, 'motor2_pwm_set', 10)
 
         # — tópicos de medição e saída PWM
         self.sub1 = self.create_subscription(Float32, 'rpm1', self.cb1, 10)
