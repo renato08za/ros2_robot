@@ -24,6 +24,7 @@ setup(
             'motores_semPID = control_motor.motores_semPID:main',
             'mapear_velocidade = control_motor.mapear_velocidade:main',
             'degrau = control_motor.degrau:main',
+            'control_PID = control_motor.control_PID:main',
         ],
     },
 )
