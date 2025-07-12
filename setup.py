@@ -27,9 +27,8 @@ setup(
             'motores_semPID = control_motor.motores_semPID:main',
             'mapear_velocidade = control_motor.mapear_velocidade:main',
             'control_PID = control_motor.control_PID:main',
-            'encoders_publisher_node = control_motor.encoders_publisher_node:main',
-            'simple_motor_control_node = control_motor.simple_motor_control_node:main',
-            'velocity_computation_node = control_motor.velocity_computation_node:main'
+            'encoder_publisher = control_motor.encoder_publisher:main',
+            'dual_motor_pid_node  = control_motor.dual_motor_pid_node:main',            
         ],
     },
 )
