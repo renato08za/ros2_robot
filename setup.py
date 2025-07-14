@@ -30,6 +30,7 @@ setup(
             'pid_motor_control = control_motor.pid_motor_control:main',
             'encoder_publisher = control_motor.encoder_publisher:main',
             'velocity_computation = control_motor.velocity_computation:main',
+            'control_motor = control_motor.control_motor:main',
         ], 
     },
 )
