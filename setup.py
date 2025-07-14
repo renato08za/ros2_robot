@@ -29,6 +29,7 @@ setup(
             'simple_dual_motor_control = control_motor.simple_dual_motor_control:main',
             'pid_motor_control = control_motor.pid_motor_control:main',
             'encoder_publisher = control_motor.encoder_publisher:main',
+            'velocity_computation = control_motor.velocity_computation:main',
         ], 
     },
 )
