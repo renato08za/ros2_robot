@@ -1,67 +1,77 @@
 #!/usr/bin/env python3
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32MultiArray
 import RPi.GPIO as GPIO
-import time
-from threading import Lock, Thread
-
-# Pinos BCM dos encoders
-ENCA1, ENCB1 = 17, 18
-ENCA2, ENCB2 = 20, 21
 
 class EncoderPublisher(Node):
     def __init__(self):
         super().__init__('encoder_publisher')
-        self.pub = self.create_publisher(Int32MultiArray, 'encoder_ticks', 10)
+        self.publisher_ = self.create_publisher(Int32MultiArray, 'encoder_ticks', 10)
 
+        # GPIO setup
         GPIO.setmode(GPIO.BCM)
-        GPIO.setup(ENCA1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(ENCB1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(ENCA2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        GPIO.setup(ENCB2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        # Encoder esquerdo
+        self.LEFT_ENCA = 17
+        self.LEFT_ENCB = 18
+        # Encoder direito
+        self.RIGHT_ENCA = 20
+        self.RIGHT_ENCB = 21
 
-        self.pos1 = 0
-        self.pos2 = 0
-        self.lock = Lock()
-        self.running = True
+        GPIO.setup(self.LEFT_ENCA, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self.LEFT_ENCB, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self.RIGHT_ENCA, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self.RIGHT_ENCB, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-        Thread(target=self._poll, args=(ENCA1, ENCB1, 1), daemon=True).start()
-        Thread(target=self._poll, args=(ENCA2, ENCB2, 2), daemon=True).start()
+        # Variáveis de contagem
+        self.left_ticks = 0
+        self.right_ticks = 0
 
-        self.create_timer(0.05, self._publish)  # 20 Hz
+        # Estados anteriores
+        self.last_left_a = GPIO.input(self.LEFT_ENCA)
+        self.last_right_a = GPIO.input(self.RIGHT_ENCA)
 
-    def _poll(self, pin_a, pin_b, idx):
-        last = GPIO.input(pin_a)
-        while self.running:
-            a = GPIO.input(pin_a); b = GPIO.input(pin_b)
-            if a != last and a == 1:
-                delta = 1 if b == 1 else -1
-                with self.lock:
-                    if idx == 1: self.pos1 += delta
-                    else:         self.pos2 += delta
-            last = a
-            time.sleep(0.0002)
+        # Timer de polling
+        self.polling_rate = 0.001  # 1000 Hz
+        self.create_timer(self.polling_rate, self.poll_encoders)
 
-    def _publish(self):
-        with self.lock:
-            msg = Int32MultiArray()
-            msg.data = [self.pos1, self.pos2]
-        self.pub.publish(msg)
+        # Timer de publicação
+        self.publishing_rate = 0.05  # 20 Hz
+        self.create_timer(self.publishing_rate, self.publish_encoder_ticks)
 
-    def destroy_node(self):
-        self.running = False
-        time.sleep(0.1)
-        GPIO.cleanup()
-        super().destroy_node()
+    def poll_encoders(self):
+        # Encoder esquerdo
+        current_left_a = GPIO.input(self.LEFT_ENCA)
+        if current_left_a != self.last_left_a:
+            if GPIO.input(self.LEFT_ENCB) != current_left_a:
+                self.left_ticks += 1
+            else:
+                self.left_ticks -= 1
+            self.last_left_a = current_left_a
+
+        # Encoder direito
+        current_right_a = GPIO.input(self.RIGHT_ENCA)
+        if current_right_a != self.last_right_a:
+            if GPIO.input(self.RIGHT_ENCB) != current_right_a:
+                self.right_ticks += 1
+            else:
+                self.right_ticks -= 1
+            self.last_right_a = current_right_a
+
+    def publish_encoder_ticks(self):
+        msg = Int32MultiArray()
+        msg.data = [self.left_ticks, self.right_ticks]
+        self.publisher_.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
     node = EncoderPublisher()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
+        GPIO.cleanup()
         node.destroy_node()
         rclpy.shutdown()
 

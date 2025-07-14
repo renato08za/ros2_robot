@@ -26,9 +26,9 @@ setup(
             'pid_test_dual = control_motor.pid_test_dual:main',
             'motores_semPID = control_motor.motores_semPID:main',
             'mapear_velocidade = control_motor.mapear_velocidade:main',
-            'control_PID = control_motor.control_PID:main',
+            'simple_dual_motor_control = control_motor.simple_dual_motor_control:main',
+            'pid_motor_control = control_motor.pid_motor_control:main',
             'encoder_publisher = control_motor.encoder_publisher:main',
-            'dual_motor_pid_node  = control_motor.dual_motor_pid_node:main',            
-        ],
+        ], 
     },
 )
