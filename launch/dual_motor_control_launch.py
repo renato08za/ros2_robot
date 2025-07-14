@@ -12,7 +12,7 @@ def generate_launch_description():
         Node(
             package='control_motor',
             executable='dual_motor_pid_node',
-            name='dual_motor_pid_node',
+            name='dual_motor_pid_nod',
             output='screen',
         ),
     ])
